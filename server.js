@@ -59,9 +59,12 @@ app.post("/pay", async (req, res) => {
     console.log("Base64 Payload:", payloadBase64);
     console.log("Hash:", hash);
 
-    // IMPORTANT: Use UAT/Sandbox endpoint for testing
-    const apiUrl = "https://api-preprod.phonepe.com/apis/hermes/pg/v1/pay";
-    console.log("Using API URL:", apiUrl);
+    // Choose endpoint based on environment or merchant ID
+    const isProduction = merchantId.startsWith('M') && !merchantId.includes('TEST');
+    const apiUrl = isProduction 
+      ? "https://api.phonepe.com/apis/hermes/pg/v1/pay"
+      : "https://api-preprod.phonepe.com/apis/hermes/pg/v1/pay";
+    console.log("Using API URL:", apiUrl, "(Production:", isProduction + ")");
 
     const response = await fetch(apiUrl, {
       method: "POST",
@@ -142,7 +145,12 @@ app.get("/status/:transactionId", async (req, res) => {
     const dataToHash = `/pg/v1/status/${merchantId}/${transactionId}` + saltKey;
     const hash = crypto.createHash("sha256").update(dataToHash).digest("hex") + "###" + saltIndex;
     
-    const response = await fetch(`https://api-preprod.phonepe.com/apis/hermes/pg/v1/status/${merchantId}/${transactionId}`, {
+    const isProduction = merchantId.startsWith('M') && !merchantId.includes('TEST');
+    const statusUrl = isProduction 
+      ? `https://api.phonepe.com/apis/hermes/pg/v1/status/${merchantId}/${transactionId}`
+      : `https://api-preprod.phonepe.com/apis/hermes/pg/v1/status/${merchantId}/${transactionId}`;
+    
+    const response = await fetch(statusUrl, {
       method: "GET",
       headers: {
         "Content-Type": "application/json",
