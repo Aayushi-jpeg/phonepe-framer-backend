@@ -22,39 +22,35 @@ app.post("/pay", async (req, res) => {
       });
     }
 
-    // Environment variables validation
+    // Environment variables
     const merchantId = process.env.MERCHANT_ID;
     const saltKey = process.env.SALT_KEY;
     const saltIndex = process.env.SALT_INDEX;
-    const callback = process.env.CALLBACK_URL;
-
-    if (!merchantId || !saltKey || !saltIndex || !callback) {
-      console.error("Missing environment variables:", {
-        merchantId: !!merchantId,
-        saltKey: !!saltKey,
-        saltIndex: !!saltIndex,
-        callback: !!callback
-      });
+    
+    if (!merchantId || !saltKey || !saltIndex) {
+      console.error("Missing environment variables");
       return res.status(500).json({ error: "Server configuration error" });
     }
 
-    const transactionId = "T" + Date.now();
+    const transactionId = "MT" + Date.now(); // Changed prefix to MT
+    const userId = "MUID" + Date.now();
     
-    // Create payload
+    // Create payload - EXACT format PhonePe expects
     const payload = {
-      merchantId,
-      merchantTransactionId: transactionId, // This should be merchantTransactionId, not transactionId
-      merchantUserId: mobile,
-      amount: amount * 100, // Amount in paisa
-      redirectUrl: callback,
+      merchantId: merchantId,
+      merchantTransactionId: transactionId,
+      merchantUserId: userId,
+      amount: parseInt(amount) * 100, // Ensure it's integer, amount in paisa
+      redirectUrl: `https://phonepe-framer-backend.onrender.com/callback/${transactionId}`,
       redirectMode: "POST",
+      callbackUrl: `https://phonepe-framer-backend.onrender.com/callback/${transactionId}`,
       mobileNumber: mobile,
       paymentInstrument: {
         type: "PAY_PAGE"
       }
     };
 
-    console.log("Payload:", JSON.stringify(payload, null, 2));
+    console.log("Final Payload:", JSON.stringify(payload, null, 2));
 
     const payloadBase64 = Buffer.from(JSON.stringify(payload)).toString("base64");
     const dataToHash = payloadBase64 + "/pg/v1/pay" + saltKey;
@@ -63,12 +59,9 @@ app.post("/pay", async (req, res) => {
     console.log("Base64 Payload:", payloadBase64);
     console.log("Hash:", hash);
 
-    // Use the correct PhonePe API endpoint
-    const apiUrl = process.env.NODE_ENV === 'production' 
-      ? "https://api.phonepe.com/apis/hermes/pg/v1/pay" 
-      : "https://api-preprod.phonepe.com/apis/hermes/pg/v1/pay"; // Use preprod for testing
-
-    console.log("API URL:", apiUrl);
+    // IMPORTANT: Use UAT/Sandbox endpoint for testing
+    const apiUrl = "https://api-preprod.phonepe.com/apis/hermes/pg/v1/pay";
+    console.log("Using API URL:", apiUrl);
 
     const response = await fetch(apiUrl, {
       method: "POST",
@@ -82,42 +75,108 @@ app.post("/pay", async (req, res) => {
       })
     });
 
-    const data = await response.json();
-    console.log("PhonePe Response:", JSON.stringify(data, null, 2));
+    const responseText = await response.text();
+    console.log("Raw Response:", responseText);
+    
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error("Failed to parse response:", parseError);
+      return res.status(500).json({ error: "Invalid response from PhonePe" });
+    }
 
-    if (data.success && data.data && data.data.instrumentResponse && data.data.instrumentResponse.redirectInfo) {
+    console.log("Parsed PhonePe Response:", JSON.stringify(data, null, 2));
+
+    // Check for success
+    if (data.success === true && data.data && data.data.instrumentResponse && data.data.instrumentResponse.redirectInfo) {
       res.json({ 
+        success: true,
         url: data.data.instrumentResponse.redirectInfo.url,
         transactionId: transactionId
       });
     } else {
-      console.error("Payment failed:", data);
+      console.error("Payment initiation failed:", data);
       res.status(400).json({ 
-        error: "Payment failed", 
+        error: "Payment initiation failed", 
         details: data,
-        code: data.code || "unknown"
+        message: data.message || "Unknown error",
+        code: data.code || "UNKNOWN"
       });
     }
   } catch (err) {
     console.error("Server error:", err);
     res.status(500).json({ 
-      error: "Something went wrong", 
+      error: "Internal server error", 
       details: err.message 
     });
   }
 });
 
-// Health check endpoint
+// Callback endpoint to handle PhonePe response
+app.post("/callback/:transactionId", (req, res) => {
+  console.log("Callback received for transaction:", req.params.transactionId);
+  console.log("Callback body:", req.body);
+  
+  // Handle the callback from PhonePe
+  // You can redirect user to success/failure page based on response
+  res.json({ message: "Callback received" });
+});
+
+app.get("/callback/:transactionId", (req, res) => {
+  console.log("GET Callback received for transaction:", req.params.transactionId);
+  console.log("Query params:", req.query);
+  
+  // Handle GET callback as well
+  res.send("Payment callback received");
+});
+
+// Status check endpoint
+app.get("/status/:transactionId", async (req, res) => {
+  try {
+    const merchantId = process.env.MERCHANT_ID;
+    const saltKey = process.env.SALT_KEY;
+    const saltIndex = process.env.SALT_INDEX;
+    const transactionId = req.params.transactionId;
+    
+    const dataToHash = `/pg/v1/status/${merchantId}/${transactionId}` + saltKey;
+    const hash = crypto.createHash("sha256").update(dataToHash).digest("hex") + "###" + saltIndex;
+    
+    const response = await fetch(`https://api-preprod.phonepe.com/apis/hermes/pg/v1/status/${merchantId}/${transactionId}`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "X-VERIFY": hash,
+        "X-MERCHANT-ID": merchantId,
+        "accept": "application/json"
+      }
+    });
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Health check
 app.get("/health", (req, res) => {
-  res.json({ status: "Server is running" });
+  res.json({ 
+    status: "Server is running",
+    timestamp: new Date().toISOString(),
+    env: {
+      merchantId: !!process.env.MERCHANT_ID,
+      saltKey: !!process.env.SALT_KEY,
+      saltIndex: !!process.env.SALT_INDEX
+    }
+  });
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log("Environment check:", {
-    merchantId: !!process.env.MERCHANT_ID,
-    saltKey: !!process.env.SALT_KEY,
-    saltIndex: !!process.env.SALT_INDEX,
-    callback: !!process.env.CALLBACK_URL
+    merchantId: process.env.MERCHANT_ID ? "✓" : "✗",
+    saltKey: process.env.SALT_KEY ? "✓" : "✗", 
+    saltIndex: process.env.SALT_INDEX ? "✓" : "✗"
   });
 });
