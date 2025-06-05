@@ -63,7 +63,7 @@ app.post("/pay", async (req, res) => {
     const isProduction = merchantId.startsWith('M') && !merchantId.includes('TEST');
     const apiUrl = isProduction 
       ? "https://api.phonepe.com/apis/hermes/pg/v1/pay"
-      : "https://api-preprod.phonepe.com/apis/hermes/pg/v1/pay";
+      : "https://api.phonepe.com/apis/hermes/pg/v1/pay";
     console.log("Using API URL:", apiUrl, "(Production:", isProduction + ")");
 
     const response = await fetch(apiUrl, {
